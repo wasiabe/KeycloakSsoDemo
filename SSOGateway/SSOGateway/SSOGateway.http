@@ -1,0 +1,6 @@
+@SSOGateway_HostAddress = http://localhost:5195
+
+GET {{SSOGateway_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

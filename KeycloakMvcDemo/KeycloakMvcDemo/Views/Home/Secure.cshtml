@@ -1,0 +1,12 @@
+﻿@{
+    ViewData["Title"] = "Secure Page of Insurance";
+}
+
+<div class="text-center">
+    <h1>Secure Page</h1>
+    <p>Welcome, @User.Identity.Name!</p>
+    <p>Access Token: @ViewBag.AccessToken</p>
+    <p><a asp-action="Logout">Logout</a></p>
+    <p><a asp-action="RedirectToReward">Redirect to Reward</a></p>
+    <p><a asp-action="RedirectToInsurance">Redirect to Insurance</a></p>
+</div>
