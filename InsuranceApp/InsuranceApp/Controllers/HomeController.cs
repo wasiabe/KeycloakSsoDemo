@@ -1,9 +1,9 @@
-using System.Diagnostics;
-using Microsoft.AspNetCore.Authentication;
+using InsuranceApp.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using InsuranceApp.Models;
-using InsuranceApp.Services;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Caching.Memory;
+using System.Diagnostics;
 
 namespace InsuranceApp.Controllers
 {
@@ -11,35 +11,49 @@ namespace InsuranceApp.Controllers
     {
         private readonly IConfiguration _config;
         private readonly TokenManagerService _tokenManagerService1;
+        private readonly IMemoryCache _cache;
 
         public HomeController(
                 IHttpClientFactory clientFactory,
                 IConfiguration config,
-                TokenManagerService tokenManagerService
+                TokenManagerService tokenManagerService,
+                IMemoryCache memoryCache
                 ) : base(clientFactory, config, tokenManagerService) 
         {
             _config = config;
             _tokenManagerService1 = tokenManagerService;
+            _cache = memoryCache;
         }
 
         public IActionResult Index()
         {
-            if ((User.Identity?.IsAuthenticated ?? true )
+            // 判斷登入狀態，若尚未登入，手動轉導至 Keycloak
+            if ((!User.Identity?.IsAuthenticated ?? true )
                 || string.IsNullOrEmpty(_tokenManagerService1.GetIdToken()) )
             {
-                // 尚未登入，手動轉導至 Keycloak
-                var clientId = _config["Keycloak:ClientId"]; 
-                var redirectUri = _config["Keycloak:RedirectUri"]; ;
+                //取得OIDC設定
+                var ssoRelay = _config["Keycloak:SSORelayLogin"]!;
+                var clientId = _config["Keycloak:ClientId"]!;
+                var redirectUri = _config["Keycloak:RedirectUri"]!;
 
-                var keycloakLoginUrl =
-                    "http://localhost:8080/realms/tcblife-realm/protocol/openid-connect/auth" +
-                    $"?client_id={Uri.EscapeDataString(clientId)}" +
-                    $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
-                    "&response_type=code" +
-                    "&scope=openid" +
-                    $"&state={Guid.NewGuid():N}";
+                var state = Guid.NewGuid().ToString("N"); // add CSRF protection
+                var nonce = Guid.NewGuid().ToString("N"); // for id_token validation
 
-                return Redirect(keycloakLoginUrl);
+                // 存入 MemoryCache（TTL 短一點）
+                var ttl = TimeSpan.FromMinutes(5);
+                _cache.Set($"oidc:state:{state}", new { clientId, redirectUri, nonce }, ttl);
+
+                var ssoRelayUrl = QueryHelpers.AddQueryString(
+                    ssoRelay,
+                    new Dictionary<string, string?>
+                    {
+                        ["client_id"] = clientId,
+                        ["redirect_uri"] = redirectUri,
+                        ["state"] = state,
+                        ["nonce"] = nonce
+                    });
+
+                return Redirect(ssoRelayUrl);
             }
 
             // 已登入

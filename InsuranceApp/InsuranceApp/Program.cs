@@ -1,4 +1,3 @@
-using InsuranceApp.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -18,6 +17,9 @@ builder.Services.AddAuthorization();
 
 //使用Session
 builder.Services.AddSession();
+
+//使用 Cache Memory 存放 state 及 nonce
+builder.Services.AddMemoryCache();
 
 //使用 TokenManagerService
 builder.Services.AddHttpContextAccessor();

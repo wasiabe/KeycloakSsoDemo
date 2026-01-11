@@ -32,8 +32,22 @@ public class TokenManagerService
         _context = _httpContextAccessor.HttpContext!;
     }
 
-    public async Task GetTokenWithAuthorizationCode(string code)
+    /// <summary>
+    /// 以 Authorization Code 換 Token，並同時接收 callback 時的 state（若有）
+    /// </summary>
+    /// <param name="code"></param>
+    /// <param name="nonce">從 callback query 取得的 nonce</param>
+    public async Task GetTokenWithAuthorizationCode(string code, string? nonce = null)
     {
+        // 計畫 (pseudocode):
+        // 1. 用 authorization code 呼叫 token endpoint，取得 id_token / access_token / refresh_token
+        // 2. 若 response 非成功，記錄錯誤並結束
+        // 3. 解析 token JSON，取出 id/access/refresh token，並儲存到 session
+        // 4. 呼叫 StoreTokenData 記錄過期時間等資訊
+        // 5. 解析 id_token 為 Jwt，取得 token 裡的 nonce (tokenNonce)
+        // 6. 若 callback 傳入的 nonce 不為 null/empty，則比對 tokenNonce 與傳入的 nonce
+        //    - 若不相符，將 _lastRefreshSuccess 設為 false，寫 log，並直接 return（不進行 sign-in）
+        // 7. 若 nonce 比對通過或未傳入 nonce，照原流程建立 ClaimsIdentity 並 SignIn
         var tokenEndpoint = _config["Keycloak:TokenEndpoint"];
         var client = _httpClientFactory.CreateClient();
 
@@ -52,7 +66,7 @@ public class TokenManagerService
             var error = await response.Content.ReadAsStringAsync();
             _lastRefreshSuccess = false;
             Console.WriteLine($"❌ Token exchange failed: {error}");
-            return ;
+            return;
         }
 
         //解析Token
@@ -74,6 +88,17 @@ public class TokenManagerService
 
         //取得nonce
         var tokenNonce = jwt.Claims.FirstOrDefault(c => c.Type == "nonce")?.Value;
+
+        // 驗證 tokenNonce 與 callback 傳入的 nonce 是否相符（若有提供 nonce）
+        if (!string.IsNullOrEmpty(nonce))
+        {
+            if (tokenNonce != nonce)
+            {
+                _lastRefreshSuccess = false;
+                Console.WriteLine($"❌ Nonce mismatch. Expected: {nonce}, token nonce: {tokenNonce ?? "null"}");
+                return;
+            }
+        }
 
         var claims = new List<Claim>
         {
@@ -181,7 +206,7 @@ public class TokenManagerService
     /// 儲存 Id Token
     /// </summary>
     /// <param name="token"></param>
-    private void SetIdToken( string token)
+    private void SetIdToken(string token)
     {
         _context.Session.SetString(_idTokenTag, token!);
     }
@@ -233,11 +258,12 @@ public class TokenManagerService
         return _context.Session.GetString(_refreshTokenTag) ?? "";
     }
 
+
     /// <summary>
     /// 記錄Token資訊
     /// </summary>
     /// <param name="tokenData"></param>
-    private void StoreTokenData (JsonElement tokenData)
+    private void StoreTokenData(JsonElement tokenData)
     {
         _accessTokenExpiresAt = DateTime.UtcNow.AddSeconds(tokenData.GetProperty("expires_in").GetInt32());
         _refreshTokenExpiresAt = DateTime.UtcNow.AddSeconds(tokenData.GetProperty("refresh_expires_in").GetInt32());
