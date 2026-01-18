@@ -23,6 +23,7 @@ builder.Services.AddMemoryCache();
 
 //¨Ï¥Î TokenManagerService
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<OidcService>();
 builder.Services.AddScoped<TokenManagerService>();
 
 var app = builder.Build();
@@ -49,3 +50,4 @@ app.UseAuthorization();
 app.MapDefaultControllerRoute();
 
 app.Run();
+

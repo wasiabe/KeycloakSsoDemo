@@ -1,4 +1,4 @@
-ï»¿using System.IdentityModel.Tokens.Jwt;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -19,85 +19,103 @@ public class TokenManagerService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _config;
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly OidcService _oidcService;
     private readonly HttpContext _context;
 
     public TokenManagerService(
         IHttpClientFactory httpClientFactory,
         IConfiguration config,
-        IHttpContextAccessor httpContextAccessor)
+        IHttpContextAccessor httpContextAccessor,
+        OidcService oidcService)
     {
         _httpClientFactory = httpClientFactory;
         _config = config;
         _httpContextAccessor = httpContextAccessor;
+        _oidcService = oidcService;
         _context = _httpContextAccessor.HttpContext!;
     }
 
     /// <summary>
-    /// ä»¥ Authorization Code æ› Tokenï¼Œä¸¦åŒæ™‚æ¥æ”¶ callback æ™‚çš„ stateï¼ˆè‹¥æœ‰ï¼‰
+    /// ¥H Authorization Code ´« Token¡A¨Ã¦P®É±µ¦¬ callback ®Éªº state¡]­Y¦³¡^
     /// </summary>
     /// <param name="code"></param>
-    /// <param name="nonce">å¾ callback query å–å¾—çš„ nonce</param>
-    public async Task GetTokenWithAuthorizationCode(string code, string? nonce = null)
+    /// <param name="state">±q callback query ¨ú±oªº state</param>
+    public async Task GetTokenWithAuthorizationCode(string code, string? state = null)
     {
-        // è¨ˆç•« (pseudocode):
-        // 1. ç”¨ authorization code å‘¼å« token endpointï¼Œå–å¾— id_token / access_token / refresh_token
-        // 2. è‹¥ response éæˆåŠŸï¼Œè¨˜éŒ„éŒ¯èª¤ä¸¦çµæŸ
-        // 3. è§£æ token JSONï¼Œå–å‡º id/access/refresh tokenï¼Œä¸¦å„²å­˜åˆ° session
-        // 4. å‘¼å« StoreTokenData è¨˜éŒ„éæœŸæ™‚é–“ç­‰è³‡è¨Š
-        // 5. è§£æ id_token ç‚º Jwtï¼Œå–å¾— token è£¡çš„ nonce (tokenNonce)
-        // 6. è‹¥ callback å‚³å…¥çš„ nonce ä¸ç‚º null/emptyï¼Œå‰‡æ¯”å° tokenNonce èˆ‡å‚³å…¥çš„ nonce
-        //    - è‹¥ä¸ç›¸ç¬¦ï¼Œå°‡ _lastRefreshSuccess è¨­ç‚º falseï¼Œå¯« logï¼Œä¸¦ç›´æ¥ returnï¼ˆä¸é€²è¡Œ sign-inï¼‰
-        // 7. è‹¥ nonce æ¯”å°é€šéæˆ–æœªå‚³å…¥ nonceï¼Œç…§åŸæµç¨‹å»ºç«‹ ClaimsIdentity ä¸¦ SignIn
+        // ­pµe (pseudocode):
+        // 1. ¥Î authorization code ©I¥s token endpoint¡A¨ú±o id_token / access_token / refresh_token
+        // 2. ­Y response «D¦¨¥\¡A°O¿ı¿ù»~¨Ãµ²§ô
+        // 3. ¸ÑªR token JSON¡A¨ú¥X id/access/refresh token¡A¨ÃÀx¦s¨ì session
+        // 4. ©I¥s StoreTokenData °O¿ı¹L´Á®É¶¡µ¥¸ê°T
+        // 5. ¸ÑªR id_token ¬° Jwt¡A¨ú±o token ¸Ìªº nonce (tokenNonce)
+        // 6. ¨Ï¥Î OidcService ÅçÃÒ tokenNonce ¬O§_¦s¦b©ó cache¡]¦¨¥\§Y§R°£¡^
+        //    - ­YÅçÃÒ¥¢±Ñ¡A±N _lastRefreshSuccess ³]¬° false¡A¼g log¡A¨Ãª½±µ return¡]¤£¶i¦æ sign-in¡^
+        // 7. ­Y nonce ÅçÃÒ³q¹L¡A·Ó­ì¬yµ{«Ø¥ß ClaimsIdentity ¨Ã SignIn
         var tokenEndpoint = _config["Keycloak:TokenEndpoint"];
         var client = _httpClientFactory.CreateClient();
 
-        var response = await client.PostAsync(tokenEndpoint, new FormUrlEncodedContent(new Dictionary<string, string>
+        var form = new Dictionary<string, string>
         {
             ["grant_type"] = "authorization_code",
             ["code"] = code,
             ["client_id"] = _config["Keycloak:ClientId"],
             ["client_secret"] = _config["Keycloak:ClientSecret"],
             ["redirect_uri"] = _config["Keycloak:RedirectUri"]
-        }));
+        };
+
+        var pkceVerifier = !string.IsNullOrWhiteSpace(state)
+            ? _oidcService.GetPKCEChallengeCode(state)
+            : null;
+
+        if (!string.IsNullOrWhiteSpace(pkceVerifier))
+            form["code_verifier"] = pkceVerifier;
+
+        var response = await client.PostAsync(tokenEndpoint, new FormUrlEncodedContent(form));
         _lastRefreshTime = DateTime.UtcNow;
 
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync();
             _lastRefreshSuccess = false;
-            Console.WriteLine($"âŒ Token exchange failed: {error}");
+            Console.WriteLine($"? Token exchange failed: {error}");
             return;
         }
 
-        //è§£æToken
+        //¸ÑªRToken
         var json = await response.Content.ReadAsStringAsync();
         var tokenData = JsonDocument.Parse(json).RootElement;
         var idToken = tokenData.GetProperty("id_token").GetString();
         var accessToken = tokenData.GetProperty("access_token").GetString();
         var refreshToken = tokenData.GetProperty("refresh_token").GetString();
 
-        //å„²å­˜Token
+        //Àx¦sToken
         SetIdToken(idToken!);
         SetAccessToken(accessToken!);
         SetRefreshToken(refreshToken!);
 
-        // è¨˜éŒ„ Token Status
+        // °O¿ı Token Status
         StoreTokenData(tokenData);
 
         var jwt = new JwtSecurityTokenHandler().ReadJwtToken(idToken);
 
-        //å–å¾—nonce
+        //¨ú±ononce
         var tokenNonce = jwt.Claims.FirstOrDefault(c => c.Type == "nonce")?.Value;
 
-        // é©—è­‰ tokenNonce èˆ‡ callback å‚³å…¥çš„ nonce æ˜¯å¦ç›¸ç¬¦ï¼ˆè‹¥æœ‰æä¾› nonceï¼‰
-        if (!string.IsNullOrEmpty(nonce))
+        // ÅçÃÒ tokenNonce ¬O§_¦b§Ö¨ú¤º¡]¦¨¥\§Y§R°£¡^
+        if (!string.IsNullOrEmpty(tokenNonce))
         {
-            if (tokenNonce != nonce)
+            if (!_oidcService.ValidateNonce(tokenNonce))
             {
                 _lastRefreshSuccess = false;
-                Console.WriteLine($"âŒ Nonce mismatch. Expected: {nonce}, token nonce: {tokenNonce ?? "null"}");
+                Console.WriteLine($"? Nonce mismatch or expired. Token nonce: {tokenNonce ?? "null"}");
                 return;
             }
+        }
+        else if (!string.IsNullOrWhiteSpace(state))
+        {
+            _lastRefreshSuccess = false;
+            Console.WriteLine("? Nonce missing in id_token.");
+            return;
         }
 
         var claims = new List<Claim>
@@ -117,12 +135,12 @@ public class TokenManagerService
     }
 
     /// <summary>
-    /// ä½¿ç”¨Refresh Tokenæ›´æ–°Access Tokenä»¥é¿å…Keycloak Sessioné€¾æ™‚
+    /// ¨Ï¥ÎRefresh Token§ó·sAccess Token¥HÁ×§KKeycloak Session¹O®É
     /// </summary>
     /// <returns></returns>
     public async Task EnsureAccessTokenValidAsync()
     {
-        // ç²å– Token
+        // Àò¨ú Token
         var refreshToken = GetRefreshToken();
         var accessToken = GetAccessToken();
 
@@ -139,9 +157,9 @@ public class TokenManagerService
         var now = DateTime.UtcNow;
 
         if ((expires - now).TotalMinutes > 2)
-            return; // token å°šæœªæ¥è¿‘éæœŸå‰‡ä¸æ›´æ–°
+            return; // token ©|¥¼±µªñ¹L´Á«h¤£§ó·s
 
-        // Token å¿«éæœŸï¼ŒåŸ·è¡Œ refresh
+        // Token §Ö¹L´Á¡A°õ¦æ refresh
         var client = _httpClientFactory.CreateClient();
         var tokenEndpoint = _config["Keycloak:TokenEndpoint"];
         var clientId = _config["Keycloak:ClientId"];
@@ -161,7 +179,7 @@ public class TokenManagerService
         {
             var error = await response.Content.ReadAsStringAsync();
             _lastRefreshSuccess = false;
-            Console.WriteLine($"âŒ Refresh failed: {error}");
+            Console.WriteLine($"? Refresh failed: {error}");
             return;
         }
 
@@ -171,28 +189,28 @@ public class TokenManagerService
         var newAccessToken = tokenData.GetProperty("access_token").GetString();
         var newRefreshToken = tokenData.GetProperty("refresh_token").GetString();
 
-        //å„²å­˜æ–°çš„Token
+        //Àx¦s·sªºToken
         SetAccessToken(newAccessToken);
         SetRefreshToken(newRefreshToken);
 
-        // è¨˜éŒ„ Token Status
+        // °O¿ı Token Status
         StoreTokenData(tokenData);
 
-        Console.WriteLine($"âœ… Token refreshed at {DateTime.Now:HH:mm:ss}");
+        Console.WriteLine($"? Token refreshed at {DateTime.Now:HH:mm:ss}");
     }
 
     public string Logout(string redirectUri)
     {
-        // 1. æ¸…é™¤æœ¬åœ°ç™»å…¥
+        // 1. ²M°£¥»¦aµn¤J
         _context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
 
-        // 2. æ¸…é™¤æœ¬åœ° cookie
+        // 2. ²M°£¥»¦a cookie
         var idToken = GetIdToken();
         SetIdToken(string.Empty);
         SetAccessToken(string.Empty);
         SetRefreshToken(string.Empty);
 
-        // 3. æº–å‚™ Keycloak ç™»å‡ºç¶²å€
+        // 3. ·Ç³Æ Keycloak µn¥Xºô§}
         var keycloakLogoutUrl = $"{_config["Keycloak:Authority"]}/protocol/openid-connect/logout";
 
         var logoutUrl = string.IsNullOrEmpty(idToken)
@@ -203,7 +221,7 @@ public class TokenManagerService
     }
 
     /// <summary>
-    /// å„²å­˜ Id Token
+    /// Àx¦s Id Token
     /// </summary>
     /// <param name="token"></param>
     private void SetIdToken(string token)
@@ -212,7 +230,7 @@ public class TokenManagerService
     }
 
     /// <summary>
-    /// å„²å­˜ Access Token
+    /// Àx¦s Access Token
     /// </summary>
     /// <param name="token"></param>
     private void SetAccessToken(string token)
@@ -221,18 +239,18 @@ public class TokenManagerService
     }
 
     /// <summary>
-    /// å„²å­˜ Refresh Token
+    /// Àx¦s Refresh Token
     /// </summary>
     /// <param name="token"></param>
     private void SetRefreshToken(string token)
     {
-        //Refresh Token å„²å­˜åœ¨Server Sideæ˜¯è¼ƒå®‰å…¨çš„ä½œæ³•
-        //æ­¤è™•å› ç‚ºæ˜¯ä½œPOC,ç‚ºæ±‚ä¾¿åˆ©æ‰€ä»¥å¯«å…¥Session
+        //Refresh Token Àx¦s¦bServer Side¬O¸û¦w¥şªº§@ªk
+        //¦¹³B¦]¬°¬O§@POC,¬°¨D«K§Q©Ò¥H¼g¤JSession
         _context.Session.SetString(_refreshTokenTag, token!);
     }
 
     /// <summary>
-    /// å–å¾— Id Token
+    /// ¨ú±o Id Token
     /// </summary>
     /// <returns></returns>
     public string GetIdToken()
@@ -241,7 +259,7 @@ public class TokenManagerService
     }
 
     /// <summary>
-    /// å–å¾— Access Token
+    /// ¨ú±o Access Token
     /// </summary>
     /// <returns></returns>
     public string GetAccessToken()
@@ -250,7 +268,7 @@ public class TokenManagerService
     }
 
     /// <summary>
-    /// å–å¾— Refresh Token
+    /// ¨ú±o Refresh Token
     /// </summary>
     /// <returns></returns>
     public string GetRefreshToken()
@@ -260,7 +278,7 @@ public class TokenManagerService
 
 
     /// <summary>
-    /// è¨˜éŒ„Tokenè³‡è¨Š
+    /// °O¿ıToken¸ê°T
     /// </summary>
     /// <param name="tokenData"></param>
     private void StoreTokenData(JsonElement tokenData)
@@ -277,7 +295,7 @@ public class TokenManagerService
     }
 
     /// <summary>
-    /// å¯«å…¥Cookie
+    /// ¼g¤JCookie
     /// </summary>
     /// <param name="key"></param>
     /// <param name="value"></param>
@@ -291,4 +309,10 @@ public class TokenManagerService
         });
     }
 }
+
+
+
+
+
+
 

@@ -2,7 +2,6 @@ using RewardsOutsource.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
-using Microsoft.Extensions.Caching.Memory;
 using System.Diagnostics;
 
 namespace RewardsOutsource.Controllers
@@ -11,18 +10,18 @@ namespace RewardsOutsource.Controllers
     {
         private readonly IConfiguration _config;
         private readonly TokenManagerService _tokenManagerService1;
-        private readonly IMemoryCache _cache;
+        private readonly OidcService _oidcService;
 
         public HomeController(
                 IHttpClientFactory clientFactory,
                 IConfiguration config,
                 TokenManagerService tokenManagerService,
-                IMemoryCache memoryCache
+                OidcService oidcService
                 ) : base(clientFactory, config, tokenManagerService)
         {
             _config = config;
             _tokenManagerService1 = tokenManagerService;
-            _cache = memoryCache;
+            _oidcService = oidcService;
         }
 
         public IActionResult Index()
@@ -36,12 +35,10 @@ namespace RewardsOutsource.Controllers
                 var clientId = _config["Keycloak:ClientId"]!;
                 var redirectUri = _config["Keycloak:RedirectUri"]!;
 
-                var state = Guid.NewGuid().ToString("N"); // add CSRF protection
-                var nonce = Guid.NewGuid().ToString("N"); // for id_token validation
-
-                // 存入 MemoryCache（TTL 短一點）
-                var ttl = TimeSpan.FromMinutes(5);
-                _cache.Set($"oidc:state:{state}", new { clientId, redirectUri, nonce }, ttl);
+                var relatedId = HttpContext.TraceIdentifier;
+                var nonce = _oidcService.GenNonce(relatedId);
+                var state = _oidcService.GenState(nonce, relatedId, clientId, redirectUri);
+                var pkceChallenge = _oidcService.GenPKCEChallengeCode(state, relatedId);
 
                 var ssoRelayUrl = QueryHelpers.AddQueryString(
                     ssoRelay,
@@ -50,7 +47,9 @@ namespace RewardsOutsource.Controllers
                         ["client_id"] = clientId,
                         ["redirect_uri"] = redirectUri,
                         ["state"] = state,
-                        ["nonce"] = nonce
+                        ["nonce"] = nonce,
+                        ["code_challenge"] = pkceChallenge,
+                        ["code_challenge_method"] = "S256"
                     });
 
                 return Redirect(ssoRelayUrl);
