@@ -108,7 +108,7 @@ public class TokenManagerService
             if (!_oidcService.ValidateNonce(tokenNonce))
             {
                 _lastRefreshSuccess = false;
-                Console.WriteLine($"❌ Nonce mismatch. Expected: {nonce}, token nonce: {tokenNonce ?? "null"}");
+                Console.WriteLine($"❌ Nonce mismatch. Expected: {tokenNonce}, token nonce: {tokenNonce ?? "null"}");
                 return;
             }
         }
