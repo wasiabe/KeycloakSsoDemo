@@ -25,3 +25,15 @@
 | InsuranceAPP | 7298 | 模擬保檢網站 |
 | RewardOutsource |  | 模擬委外的集點平台 |
 
+
+#**Auth Flow Checklist**
+
+1.  Start from GET /auth/login and GET / (unauthenticated) and verify redirects to Keycloak:SSORelaySilent and Keycloak:SSORelayLogin respectively.
+2. Confirm the redirect includes state, nonce, code_challenge, and code_challenge_method=S256 in the query.
+3. In SSOGateway, verify it forwards code_challenge (+ method) to Keycloak:OIDCEndpoint for both /sso-relay-silent and /sso-relay-login.
+4. After Keycloak callback, verify /auth/callback rejects missing/invalid state and accepts valid state once, then fails on replay.
+5. Confirm token exchange uses code_verifier (derived from state) and succeeds when code_challenge was sent.
+6. Verify nonce validation succeeds once, then fails if the same id_token nonce is replayed.
+7. Ensure successful flow signs in and redirects to Home/Secure, and access token is visible in the view.
+8. Negative test: remove code_challenge from the initial request and confirm PKCE is skipped but flow still works (if Keycloak allows).
+
