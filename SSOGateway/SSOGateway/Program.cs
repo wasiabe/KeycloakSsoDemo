@@ -19,8 +19,8 @@ if (app.Environment.IsDevelopment())
 app.UseHttpsRedirection();
 
 ///======================================================
-//µL¤¬°Ê¼Ò¦¡
-//Keycloak ¤£·|Åã¥Ü¥ô¦óµe­±¡C¦pªG¨Ï¥ÎªÌ¥¼µn¤J¡A·|ª½±µªğ¦^¿ù»~¡F³o³q±`¥Î©óÀË¬dµn¤Jª¬ºA¡C
+//ç„¡äº’å‹•æ¨¡å¼
+//Keycloak ä¸æœƒé¡¯ç¤ºä»»ä½•ç•«é¢ã€‚å¦‚æœä½¿ç”¨è€…æœªç™»å…¥ï¼Œæœƒç›´æ¥è¿”å›éŒ¯èª¤ï¼›é€™é€šå¸¸ç”¨æ–¼æª¢æŸ¥ç™»å…¥ç‹€æ…‹ã€‚
 ///======================================================
 app.MapGet("/sso-relay-silent", async (HttpContext context, IConfiguration config) =>
 {
@@ -29,17 +29,23 @@ app.MapGet("/sso-relay-silent", async (HttpContext context, IConfiguration confi
     var clientId = query["client_id"].ToString();
     var redirectUri = query["redirect_uri"].ToString();
 
-    // ¦pªG Query String ¦³¶Ç¤J state «h¨Ï¥Î¡A§_«h²£¥Í·sªº
+    // å¦‚æœ Query String æœ‰å‚³å…¥ state å‰‡ä½¿ç”¨ï¼Œå¦å‰‡ç”¢ç”Ÿæ–°çš„
     var stateFromQuery = query.TryGetValue("state", out var stateVal) ? stateVal.ToString() : null;
     var state = !string.IsNullOrWhiteSpace(stateFromQuery)
         ? stateFromQuery
         : Guid.NewGuid().ToString("N");
 
-    // ¦pªG Query String ¦³¶Ç¤J nonce «h¨Ï¥Î¡A§_«h²£¥Í·sªº
+     // å¦‚æœ Query String æœ‰å‚³å…¥ nonce å‰‡ä½¿ç”¨ï¼Œå¦å‰‡ç”¢ç”Ÿæ–°çš„
     var nonceFromQuery = query.TryGetValue("nonce", out var nonceVal) ? nonceVal.ToString() : null;
     var nonce = !string.IsNullOrWhiteSpace(nonceFromQuery)
         ? nonceFromQuery
         : Guid.NewGuid().ToString("N");
+    var codeChallenge = query.TryGetValue("code_challenge", out var codeChallengeVal)
+        ? codeChallengeVal.ToString()
+        : null;
+    var codeChallengeMethod = query.TryGetValue("code_challenge_method", out var codeChallengeMethodVal)
+        ? codeChallengeMethodVal.ToString()
+        : null;
 
     if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(redirectUri))
     {
@@ -48,25 +54,35 @@ app.MapGet("/sso-relay-silent", async (HttpContext context, IConfiguration confi
         return;
     }
 
+    var parameters = new Dictionary<string, string?>
+    {
+        ["client_id"] = clientId,
+        ["redirect_uri"] = redirectUri,
+        ["response_type"] = "code",
+        ["scope"] = "openid",
+        ["prompt"] = "none",    //ä¸é¡¯ç¤ºç™»å…¥ç•«é¢
+        ["state"] = state,
+        ["nonce"] = nonce
+    };
+
+    if (!string.IsNullOrWhiteSpace(codeChallenge))
+    {
+        parameters["code_challenge"] = codeChallenge;
+        parameters["code_challenge_method"] = string.IsNullOrWhiteSpace(codeChallengeMethod)
+            ? "S256"
+            : codeChallengeMethod;
+    }
+
     var authUrl = QueryHelpers.AddQueryString(
         config["Keycloak:OIDCEndpoint"]!,
-        new Dictionary<string, string?>
-        {
-            ["client_id"] = clientId,
-            ["redirect_uri"] = redirectUri,
-            ["response_type"] = "code",
-            ["scope"] = "openid",
-            ["prompt"] = "none",    //µL¤¬°Ê¼Ò¦¡(¤£Åã¥Üµn¤Jµe­±)
-            ["state"] = state,
-            ["nonce"] = nonce
-        });
+        parameters);
 
     context.Response.Redirect(authUrl);
 });
 
 ///======================================================
-//±j¨î­n¨Dµn¤J
-//Keycloak ·|©¿²¤²{¦³ªº Session¡A±j¨î¨Ï¥ÎªÌ­«·s¿é¤J±b¸¹±K½X¡C
+//å¼·åˆ¶è¦æ±‚ç™»å…¥
+//Keycloak æœƒå¿½ç•¥ç¾æœ‰çš„ Sessionï¼Œå¼·åˆ¶ä½¿ç”¨è€…é‡æ–°è¼¸å…¥å¸³è™Ÿå¯†ç¢¼ã€‚
 ///======================================================
 app.MapGet("/sso-relay-login", async (HttpContext context, IConfiguration config) =>
 {
@@ -75,17 +91,23 @@ app.MapGet("/sso-relay-login", async (HttpContext context, IConfiguration config
     var clientId = query["client_id"].ToString();
     var redirectUri = query["redirect_uri"].ToString();
 
-    // ¦pªG Query String ¦³¶Ç¤J state «h¨Ï¥Î¡A§_«h²£¥Í·sªº
+    // å¦‚æœ Query String æœ‰å‚³å…¥ state å‰‡ä½¿ç”¨ï¼Œå¦å‰‡ç”¢ç”Ÿæ–°çš„
     var stateFromQuery = query.TryGetValue("state", out var stateVal) ? stateVal.ToString() : null;
     var state = !string.IsNullOrWhiteSpace(stateFromQuery)
         ? stateFromQuery
         : Guid.NewGuid().ToString("N");
 
-    // ¦pªG Query String ¦³¶Ç¤J nonce «h¨Ï¥Î¡A§_«h²£¥Í·sªº
+    // å¦‚æœ Query String æœ‰å‚³å…¥ nonce å‰‡ä½¿ç”¨ï¼Œå¦å‰‡ç”¢ç”Ÿæ–°çš„
     var nonceFromQuery = query.TryGetValue("nonce", out var nonceVal) ? nonceVal.ToString() : null;
     var nonce = !string.IsNullOrWhiteSpace(nonceFromQuery)
         ? nonceFromQuery
         : Guid.NewGuid().ToString("N");
+    var codeChallenge = query.TryGetValue("code_challenge", out var codeChallengeVal)
+        ? codeChallengeVal.ToString()
+        : null;
+    var codeChallengeMethod = query.TryGetValue("code_challenge_method", out var codeChallengeMethodVal)
+        ? codeChallengeMethodVal.ToString()
+        : null;
 
     if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(redirectUri))
     {
@@ -94,18 +116,28 @@ app.MapGet("/sso-relay-login", async (HttpContext context, IConfiguration config
         return;
     }
 
+    var parameters = new Dictionary<string, string?>
+    {
+        ["client_id"] = clientId,
+        ["redirect_uri"] = redirectUri,
+        ["response_type"] = "code",
+        ["scope"] = "openid",
+        ["prompt"] = "login",    //é¡¯ç¤ºç™»å…¥ç•«é¢
+        ["state"] = state,
+        ["nonce"] = nonce
+    };
+
+    if (!string.IsNullOrWhiteSpace(codeChallenge))
+    {
+        parameters["code_challenge"] = codeChallenge;
+        parameters["code_challenge_method"] = string.IsNullOrWhiteSpace(codeChallengeMethod)
+            ? "S256"
+            : codeChallengeMethod;
+    }
+
     var authUrl = QueryHelpers.AddQueryString(
         config["Keycloak:OIDCEndpoint"]!,
-        new Dictionary<string, string?>
-        {
-            ["client_id"] = clientId,
-            ["redirect_uri"] = redirectUri,
-            ["response_type"] = "code",
-            ["scope"] = "openid",
-            ["prompt"] = "login",    //±j¨îµn¤J
-            ["state"] = state,
-            ["nonce"] = nonce
-        });
+        parameters);
 
     context.Response.Redirect(authUrl);
 });

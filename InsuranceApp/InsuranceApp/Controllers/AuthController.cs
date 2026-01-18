@@ -1,24 +1,22 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
-using Microsoft.Extensions.Caching.Memory;
-
 public class AuthController : Controller
 {
     private readonly IConfiguration _config;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly TokenManagerService _tokenManager;
-    private readonly IMemoryCache _cache;
+    private readonly OidcService _oidcService;
 
     public AuthController(
         IConfiguration config,
         IHttpClientFactory httpClientFactory,
         TokenManagerService tokenManagerService,
-        IMemoryCache memoryCache)
+        OidcService oidcService)
     {
         _config = config;
         _httpClientFactory = httpClientFactory;
         _tokenManager = tokenManagerService;
-        _cache = memoryCache;
+        _oidcService = oidcService;
     }
 
     [HttpGet("/auth/login")]
@@ -29,12 +27,10 @@ public class AuthController : Controller
         var clientId = _config["Keycloak:ClientId"]!;
         var redirectUri = _config["Keycloak:RedirectUri"]!;
 
-        var state = Guid.NewGuid().ToString("N"); // add CSRF protection
-        var nonce = Guid.NewGuid().ToString("N"); // for id_token validation
-
-        // 存入 MemoryCache（TTL 短一點）
-        var ttl = TimeSpan.FromMinutes(5);
-        _cache.Set($"oidc:state:{state}", new { clientId, redirectUri, nonce }, ttl);
+        var relatedId = HttpContext.TraceIdentifier;
+        var nonce = _oidcService.GenNonce(relatedId);
+        var state = _oidcService.GenState(nonce, relatedId, clientId, redirectUri);
+        var pkceChallenge = _oidcService.GenPKCEChallengeCode(state, relatedId);
 
         var ssoRelayUrl = QueryHelpers.AddQueryString(
             ssoRelay,
@@ -43,7 +39,9 @@ public class AuthController : Controller
                 ["client_id"] = clientId,
                 ["redirect_uri"] = redirectUri,
                 ["state"] = state,
-                ["nonce"] = nonce
+                ["nonce"] = nonce,
+                ["code_challenge"] = pkceChallenge,
+                ["code_challenge_method"] = "S256"
             });
 
         return Redirect(ssoRelayUrl);
@@ -55,14 +53,11 @@ public class AuthController : Controller
         if (string.IsNullOrEmpty(code))
             return BadRequest("Missing authorization code");
 
-        //驗證state
-        if (!_cache.TryGetValue($"oidc:state:{state}", out dynamic? data) || data is null)
+        //����state
+        if (!_oidcService.ValidateState(state))
             return Unauthorized("Invalid or expired state.");
 
-        _cache.Remove($"oidc:state:{state}");
-        var nonce = (string)data.nonce;
-
-        await _tokenManager.GetTokenWithAuthorizationCode(code, nonce);
+        await _tokenManager.GetTokenWithAuthorizationCode(code, state);
 
         return RedirectToAction("Secure", "Home");
     }
@@ -76,3 +71,6 @@ public class AuthController : Controller
         return Redirect(logoutUrl);
     }
 }
+
+
+

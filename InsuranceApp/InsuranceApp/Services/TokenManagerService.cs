@@ -1,4 +1,4 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -20,25 +20,28 @@ public class TokenManagerService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _config;
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly OidcService _oidcService;
     private readonly HttpContext _context;
 
     public TokenManagerService(
         IHttpClientFactory httpClientFactory,
         IConfiguration config,
-        IHttpContextAccessor httpContextAccessor)
+        IHttpContextAccessor httpContextAccessor,
+        OidcService oidcService)
     {
         _httpClientFactory = httpClientFactory;
         _config = config;
         _httpContextAccessor = httpContextAccessor;
+        _oidcService = oidcService;
         _context = _httpContextAccessor.HttpContext!;
     }
 
     /// <summary>
     /// 以 Authorization Code 換 Token，並同時接收 callback 時的 state（若有）
-    /// </summary>
+     /// </summary>
     /// <param name="code"></param>
     /// <param name="nonce">從 callback query 取得的 nonce</param>
-    public async Task GetTokenWithAuthorizationCode(string code, string? nonce = null)
+    public async Task GetTokenWithAuthorizationCode(string code, string? state = null)
     {
         // 計畫 (pseudocode):
         // 1. 用 authorization code 呼叫 token endpoint，取得 id_token / access_token / refresh_token
@@ -52,14 +55,23 @@ public class TokenManagerService
         var tokenEndpoint = _config["Keycloak:TokenEndpoint"];
         var client = _httpClientFactory.CreateClient();
 
-        var response = await client.PostAsync(tokenEndpoint, new FormUrlEncodedContent(new Dictionary<string, string>
+        var form = new Dictionary<string, string>
         {
             ["grant_type"] = "authorization_code",
             ["code"] = code,
             ["client_id"] = _config["Keycloak:ClientId"],
             ["client_secret"] = _config["Keycloak:ClientSecret"],
             ["redirect_uri"] = _config["Keycloak:RedirectUri"]
-        }));
+        };
+
+        var pkceVerifier = !string.IsNullOrWhiteSpace(state)
+            ? _oidcService.GetPKCEChallengeCode(state)
+            : null;
+
+        if (!string.IsNullOrWhiteSpace(pkceVerifier))
+            form["code_verifier"] = pkceVerifier;
+
+        var response = await client.PostAsync(tokenEndpoint, new FormUrlEncodedContent(form));
         _lastRefreshTime = DateTime.UtcNow;
 
         if (!response.IsSuccessStatusCode)
@@ -91,14 +103,20 @@ public class TokenManagerService
         var tokenNonce = jwt.Claims.FirstOrDefault(c => c.Type == "nonce")?.Value;
 
         // 驗證 tokenNonce 與 callback 傳入的 nonce 是否相符（若有提供 nonce）
-        if (!string.IsNullOrEmpty(nonce))
+        if (!string.IsNullOrEmpty(tokenNonce))
         {
-            if (tokenNonce != nonce)
+            if (!_oidcService.ValidateNonce(tokenNonce))
             {
                 _lastRefreshSuccess = false;
                 Console.WriteLine($"❌ Nonce mismatch. Expected: {nonce}, token nonce: {tokenNonce ?? "null"}");
                 return;
             }
+        }
+        else if (!string.IsNullOrWhiteSpace(state))
+        {
+            _lastRefreshSuccess = false;
+            Console.WriteLine("? Nonce missing in id_token.");
+            return;
         }
 
         var claims = new List<Claim>
@@ -143,7 +161,7 @@ public class TokenManagerService
             return; // token 尚未接近過期則不更新
 
         // Token 快過期，執行 refresh
-        var client = _httpClientFactory.CreateClient();
+       var client = _httpClientFactory.CreateClient();
         var tokenEndpoint = _config["Keycloak:TokenEndpoint"];
         var clientId = _config["Keycloak:ClientId"];
         var clientSecret = _config["Keycloak:ClientSecret"];
@@ -180,21 +198,21 @@ public class TokenManagerService
         StoreTokenData(tokenData);
 
         Console.WriteLine($"✅ Token refreshed at {DateTime.Now:HH:mm:ss}");
-    }
+     }
 
     public string Logout(string redirectUri)
     {
         // 1. 清除本地登入
         _context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
 
-        // 2. 清除本地 cookie
+         // 2. 清除本地 cookie
         var idToken = GetIdToken();
         SetIdToken(string.Empty);
         SetAccessToken(string.Empty);
         SetRefreshToken(string.Empty);
 
-        // 3. 準備 Keycloak 登出網址
-        var keycloakLogoutUrl = $"{_config["Keycloak:Authority"]}/protocol/openid-connect/logout";
+         // 3. 準備 Keycloak 登出網址
+       var keycloakLogoutUrl = $"{_config["Keycloak:Authority"]}/protocol/openid-connect/logout";
 
         var logoutUrl = string.IsNullOrEmpty(idToken)
             ? $"{keycloakLogoutUrl}?post_logout_redirect_uri={Uri.EscapeDataString(redirectUri)}"
@@ -251,7 +269,7 @@ public class TokenManagerService
     }
 
     /// <summary>
-    /// 取得 Refresh Token
+   /// 取得 Refresh Token
     /// </summary>
     /// <returns></returns>
     public string GetRefreshToken()
